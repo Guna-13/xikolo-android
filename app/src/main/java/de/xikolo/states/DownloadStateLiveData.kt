@@ -1,20 +1,22 @@
 package de.xikolo.states
 
+import de.xikolo.download.DownloadIdentifier
 import de.xikolo.states.base.LiveDataState
 
-class DownloadStateLiveData : LiveDataState<DownloadStateLiveData.DownloadStateCode>(DownloadStateCode.DELETED) {
+class DownloadStateLiveData :
+    LiveDataState<DownloadStateLiveData.DownloadStateCode>(DownloadStateCode.DELETED) {
 
     companion object {
         private val map = mutableMapOf<String, DownloadStateLiveData>()
 
-        fun of(key: String?): DownloadStateLiveData {
+        fun of(key: DownloadIdentifier?): DownloadStateLiveData {
             return if (key != null) {
                 val newObj = DownloadStateLiveData()
-                if (!map.containsKey(key)) {
-                    map[key] = newObj
+                if (!map.containsKey(key.toString())) {
+                    map[key.toString()] = newObj
                 }
 
-                map[key] ?: newObj
+                map[key.toString()] ?: newObj
             } else {
                 DownloadStateLiveData()
             }
@@ -36,5 +38,4 @@ class DownloadStateLiveData : LiveDataState<DownloadStateLiveData.DownloadStateC
     enum class DownloadStateCode {
         STARTED, COMPLETED, DELETED
     }
-
 }

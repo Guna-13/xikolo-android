@@ -1,7 +1,6 @@
 package de.xikolo.controllers.helper
 
 import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.view.LayoutInflater
@@ -19,20 +18,25 @@ import de.xikolo.R
 import de.xikolo.controllers.dialogs.ConfirmDeleteDialog
 import de.xikolo.controllers.dialogs.ConfirmDeleteDialogAutoBundle
 import de.xikolo.controllers.dialogs.MobileDownloadDialog
+import de.xikolo.download.DownloadIdentifier
+import de.xikolo.download.DownloadItem
 import de.xikolo.extensions.observe
-import de.xikolo.managers.DownloadManager
-import de.xikolo.models.DownloadAsset
 import de.xikolo.states.DownloadStateLiveData
 import de.xikolo.storages.ApplicationPreferences
-import de.xikolo.utils.FileProviderUtil
-import de.xikolo.utils.extensions.*
+import de.xikolo.utils.extensions.ConnectivityType
+import de.xikolo.utils.extensions.asFormattedFileSize
+import de.xikolo.utils.extensions.connectivityType
+import de.xikolo.utils.extensions.fileSize
+import de.xikolo.utils.extensions.isOnline
+import de.xikolo.utils.extensions.showToast
+import java.io.File
 
 /**
  * When the url of the DownloadAsset's URL is null, the urlNotAvailableMessage is shown and the UI will be disabled.
  */
 class DownloadViewHelper(
     private val activity: FragmentActivity,
-    private val downloadAsset: DownloadAsset,
+    private val download: DownloadItem<*, DownloadIdentifier>,
     title: CharSequence? = null,
     description: CharSequence? = null,
     urlNotAvailableMessage: CharSequence? = null
@@ -42,8 +46,6 @@ class DownloadViewHelper(
         val TAG: String = DownloadViewHelper::class.java.simpleName
         private const val MILLISECONDS = 250L
     }
-
-    private val downloadManager: DownloadManager = DownloadManager(activity)
 
     val view: View
 
@@ -111,7 +113,7 @@ class DownloadViewHelper(
         }
 
         buttonDownloadCancel.setOnClickListener { _ ->
-            downloadManager.cancelAssetDownload(downloadAsset)
+            download.cancel(activity)
             showStartState()
         }
 
@@ -137,7 +139,7 @@ class DownloadViewHelper(
         if (title != null) {
             textFileName.text = title
         } else {
-            textFileName.text = downloadAsset.title
+            textFileName.text = download.title
         }
 
         if (description != null) {
@@ -147,7 +149,7 @@ class DownloadViewHelper(
             textDescription.visibility = View.GONE
         }
 
-        if (downloadAsset.url == null) {
+        if (!download.isDownloadable) {
             view.isEnabled = false
             buttonDownloadStart.isEnabled = false
 
@@ -159,17 +161,9 @@ class DownloadViewHelper(
         }
 
         buttonOpenDownload.setOnClickListener {
-            val file = downloadManager.getDownloadFile(downloadAsset)
-            if (file != null) {
-                val target = Intent(Intent.ACTION_VIEW)
-                target.setDataAndType(FileProviderUtil.getUriForFile(file), downloadAsset.mimeType)
-                target.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY)
-                target.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                val intent = Intent.createChooser(target, null)
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (download.openIntent != null) {
                 try {
-                    App.instance.startActivity(intent)
+                    App.instance.startActivity(download.openIntent)
                 } catch (e: ActivityNotFoundException) {
                     activity.showToast(R.string.toast_no_file_viewer_found)
                 }
@@ -182,17 +176,18 @@ class DownloadViewHelper(
             override fun run() {
                 Handler(Looper.getMainLooper()).post {
                     if (progressBarUpdaterRunning) {
-
-                        val bytesWritten = downloadManager.getDownloadWrittenBytes(downloadAsset)
-                        val totalBytes = downloadManager.getDownloadTotalBytes(downloadAsset)
+                        val status = download.status
+                        val downloadedBytes = status?.downloadedBytes ?: 0L
+                        val totalBytes = status?.totalBytes ?: 0L
 
                         progressBarDownload.isIndeterminate = false
                         if (totalBytes == 0L) {
                             progressBarDownload.progress = 0
                         } else {
-                            progressBarDownload.progress = (bytesWritten * 100 / totalBytes).toInt()
+                            progressBarDownload.progress =
+                                (downloadedBytes * 100 / totalBytes).toInt()
                         }
-                        textFileSize.text = (bytesWritten.asFormattedFileSize + " / "
+                        textFileSize.text = (downloadedBytes.asFormattedFileSize + " / "
                             + totalBytes.asFormattedFileSize)
                     }
                 }
@@ -204,22 +199,22 @@ class DownloadViewHelper(
         }
 
         when {
-            downloadManager.downloadRunningWithSecondaryAssets(downloadAsset) -> showRunningState()
-            downloadManager.downloadExists(downloadAsset)                     -> showEndState()
-            else                                                              -> showStartState()
+            download.isDownloadRunning -> showRunningState()
+            download.downloadExists -> showEndState()
+            else -> showStartState()
         }
 
         registerDownloadStateObservers()
     }
 
     private fun deleteFile() {
-        if (downloadManager.deleteAssetDownload(downloadAsset)) {
+        if (download.delete(activity)) {
             showStartState()
         }
     }
 
     private fun startDownload() {
-        if (downloadManager.startAssetDownload(downloadAsset)) {
+        if (download.start(activity)) {
             showRunningState()
         }
     }
@@ -233,9 +228,9 @@ class DownloadViewHelper(
         progressBarDownload.isIndeterminate = true
         progressBarUpdaterRunning = false
 
-        if (downloadAsset.sizeWithSecondaryAssets != 0L) {
+        if (download.downloadSize != 0L) {
             textFileSize.visibility = View.VISIBLE
-            textFileSize.text = downloadAsset.sizeWithSecondaryAssets.asFormattedFileSize
+            textFileSize.text = download.downloadSize.asFormattedFileSize
         } else {
             textFileSize.visibility = View.GONE
         }
@@ -259,52 +254,38 @@ class DownloadViewHelper(
 
         textFileSize.visibility = View.VISIBLE
 
-        textFileSize.text = if (downloadAsset.sizeWithSecondaryAssets != 0L) {
-            downloadAsset.sizeWithSecondaryAssets.asFormattedFileSize
+        textFileSize.text = if (download.downloadSize != 0L) {
+            download.downloadSize.asFormattedFileSize
         } else {
-            downloadManager.getDownloadFile(downloadAsset).fileSize.asFormattedFileSize
+            (download.download as? File?).fileSize.asFormattedFileSize
         }
 
         progressBarUpdaterRunning = false
     }
 
-    private val wholeDownloadComplete
-        get() = !downloadManager.downloadRunningWithSecondaryAssets(downloadAsset)
-            && downloadManager.downloadExists(downloadAsset)
-
-
     private fun registerDownloadStateObservers() {
-        // necessary because secondary download assets can complete after the main asset which would then not receive another event
-        downloadAsset.secondaryAssets.forEach { asset ->
-            App.instance.state.download.of(asset.url)
+        if (download.isDownloadable) {
+            App.instance.state.download.of(download.identifier)
                 .observe(activity) {
-                    if (it == DownloadStateLiveData.DownloadStateCode.COMPLETED
-                        && wholeDownloadComplete) {
-                        showEndState()
+                    when (it) {
+                        DownloadStateLiveData.DownloadStateCode.COMPLETED -> {
+                            if (!download.isDownloadRunning && download.downloadExists) {
+                                showEndState()
+                            }
+                        }
+                        DownloadStateLiveData.DownloadStateCode.STARTED -> {
+                            if (!progressBarUpdaterRunning) {
+                                showRunningState()
+                            }
+                        }
+                        DownloadStateLiveData.DownloadStateCode.DELETED -> {
+                            if (progressBarUpdaterRunning) {
+                                showStartState()
+                            }
+                        }
                     }
                 }
         }
-
-        App.instance.state.download.of(downloadAsset.url)
-            .observe(activity) {
-                when (it) {
-                    DownloadStateLiveData.DownloadStateCode.COMPLETED -> {
-                        if (wholeDownloadComplete) {
-                            showEndState()
-                        }
-                    }
-                    DownloadStateLiveData.DownloadStateCode.STARTED   -> {
-                        if (!progressBarUpdaterRunning) {
-                            showRunningState()
-                        }
-                    }
-                    DownloadStateLiveData.DownloadStateCode.DELETED   -> {
-                        if (progressBarUpdaterRunning) {
-                            showStartState()
-                        }
-                    }
-                }
-            }
 
         App.instance.state.downloadCancellation
             .observe(activity) {
@@ -318,5 +299,4 @@ class DownloadViewHelper(
         buttonOpenDownload.text = activity.getString(buttonText)
         buttonOpenDownload.setOnClickListener { onClick.invoke() }
     }
-
 }
