@@ -50,8 +50,8 @@ data class FileDownloadRequest(
             .addRequestHeader(Config.HEADER_USER_PLATFORM, Config.HEADER_USER_PLATFORM_VALUE)
             .addRequestHeader(Config.HEADER_ACCEPT_LANGUAGE, Locale.getDefault().language)
             .apply {
-                if (uri.host == App.instance.getString(R.string.app_host)
-                    && UserManager.isAuthorized
+                if (uri.host == App.instance.getString(R.string.app_host) &&
+                    UserManager.isAuthorized
                 ) {
                     addRequestHeader(
                         Config.HEADER_AUTH,
