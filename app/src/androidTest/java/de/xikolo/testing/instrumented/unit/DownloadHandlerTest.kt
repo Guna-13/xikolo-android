@@ -11,7 +11,6 @@ import de.xikolo.download.filedownload.FileDownloadIdentifier
 import de.xikolo.download.filedownload.FileDownloadRequest
 import de.xikolo.testing.instrumented.mocking.SampleMockData
 import de.xikolo.testing.instrumented.mocking.base.BaseTest
-import de.xikolo.utils.extensions.createIfNotExists
 import de.xikolo.utils.extensions.preferredStorage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,7 +18,6 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 
@@ -29,15 +27,15 @@ abstract class DownloadHandlerTest<T : DownloadHandler<I, R>,
     class FileDownloadHandlerTest : DownloadHandlerTest<FileDownloadHandler,
         FileDownloadIdentifier, FileDownloadRequest>() {
 
-        @Before
-        fun setUp() {
-            context.preferredStorage.file.deleteRecursively()
-            context.preferredStorage.file.createIfNotExists()
-        }
-
         override var downloadHandler = FileDownloadHandler(context)
         override var successfulTestRequest = FileDownloadRequest(
             SampleMockData.mockVideoStreamSdUrl,
+            createTempFile(directory = context.preferredStorage.file),
+            "TITLE",
+            true
+        )
+        override var successfulTestRequest2 = FileDownloadRequest(
+            SampleMockData.mockVideoStreamThumbnailUrl,
             createTempFile(directory = context.preferredStorage.file),
             "TITLE",
             true
@@ -58,6 +56,7 @@ abstract class DownloadHandlerTest<T : DownloadHandler<I, R>,
     abstract var downloadHandler: T
 
     abstract var successfulTestRequest: R
+    abstract var successfulTestRequest2: R
     abstract var failingTestRequest: R
     abstract var invalidIdentifier: I
 
@@ -84,23 +83,20 @@ abstract class DownloadHandlerTest<T : DownloadHandler<I, R>,
             downloadHandler.status(identifier)!!.totalBytes
                 <= downloadHandler.status(identifier)!!.totalBytes
         )
+
+        downloadHandler.cancel(identifier)
     }
 
     @Test
     fun testDownloadStatusAfterCancel() {
-        var calledIdentifier: I? = null
-        downloadHandler.onCompletionListener = { identifier, status ->
-            calledIdentifier = identifier
-        }
-
         val identifier = downloadHandler.download(successfulTestRequest)
         assertNotNull(downloadHandler.status(identifier))
 
         assertTrue(downloadHandler.cancel(identifier))
-        assertNull(downloadHandler.status(identifier))
+        Thread.sleep(1000)
 
-        assertNotNull(calledIdentifier)
-        assertEquals(calledIdentifier!!, identifier)
+        assertNotEquals(DownloadStatus.State.SUCCESSFUL, downloadHandler.status(identifier)!!.state)
+        assertNotEquals(DownloadStatus.State.FAILED, downloadHandler.status(identifier)!!.state)
     }
 
     @Test
@@ -124,10 +120,38 @@ abstract class DownloadHandlerTest<T : DownloadHandler<I, R>,
             { downloadHandler.status(identifier)?.state != DownloadStatus.State.SUCCESSFUL },
             30000
         )
-        Thread.sleep(1000)
+        Thread.sleep(5000)
 
         assertNotNull(calledIdentifier)
         assertEquals(calledIdentifier!!, identifier)
+    }
+
+    @Test
+    fun testParallelDownloading() {
+        val identifier = downloadHandler.download(successfulTestRequest)
+        val identifier2 = downloadHandler.download(successfulTestRequest2)
+        assertNotNull(downloadHandler.status(identifier))
+        assertNotNull(downloadHandler.status(identifier2))
+
+        assertNotEquals(
+            DownloadStatus.State.FAILED,
+            downloadHandler.status(identifier)!!.state
+        )
+        assertNotEquals(
+            DownloadStatus.State.SUCCESSFUL,
+            downloadHandler.status(identifier)!!.state
+        )
+        assertNotEquals(
+            DownloadStatus.State.FAILED,
+            downloadHandler.status(identifier2)!!.state
+        )
+        assertNotEquals(
+            DownloadStatus.State.SUCCESSFUL,
+            downloadHandler.status(identifier2)!!.state
+        )
+
+        downloadHandler.cancel(identifier)
+        downloadHandler.cancel(identifier2)
     }
 
     @Test
